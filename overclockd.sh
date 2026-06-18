@@ -419,15 +419,15 @@ tune_memory() {
         echo "vm.swappiness=60" >> /etc/sysctl.conf
     log "vm.swappiness = 60"
 
-    sysctl -w vm.dirty_ratio=10 > /dev/null
+    sysctl -w vm.dirty_ratio=15 > /dev/null
     sysctl -w vm.dirty_background_ratio=5 > /dev/null
     grep -q "^vm.dirty_ratio" /etc/sysctl.conf && \
-        sed -i 's/^vm.dirty_ratio=.*/vm.dirty_ratio=10/' /etc/sysctl.conf || \
-        echo "vm.dirty_ratio=10" >> /etc/sysctl.conf
+        sed -i 's/^vm.dirty_ratio=.*/vm.dirty_ratio=15/' /etc/sysctl.conf || \
+        echo "vm.dirty_ratio=15" >> /etc/sysctl.conf
     grep -q "^vm.dirty_background_ratio" /etc/sysctl.conf && \
         sed -i 's/^vm.dirty_background_ratio=.*/vm.dirty_background_ratio=5/' /etc/sysctl.conf || \
         echo "vm.dirty_background_ratio=5" >> /etc/sysctl.conf
-    log "vm.dirty_ratio=10, vm.dirty_background_ratio=5"
+    log "vm.dirty_ratio=15, vm.dirty_background_ratio=5"
 
     echo never > /sys/kernel/mm/transparent_hugepage/enabled
     echo never > /sys/kernel/mm/transparent_hugepage/defrag
@@ -456,11 +456,7 @@ EOF
         log "NUMA auto-balancing → disabled"
     fi
 
-    sysctl -w vm.overcommit_memory=1 > /dev/null
-    grep -q "^vm.overcommit_memory" /etc/sysctl.conf && \
-        sed -i 's/^vm.overcommit_memory=.*/vm.overcommit_memory=1/' /etc/sysctl.conf || \
-        echo "vm.overcommit_memory=1" >> /etc/sysctl.conf
-    log "vm.overcommit_memory=1 (JVM/Java friendly)"
+    log "Memory tuning applied"
 }
 
 # =============================================================================
@@ -542,16 +538,21 @@ tune_network() {
     cat >> /etc/sysctl.conf << 'EOF'
 
 # RaeHost Network Tuning
+# TCP buffers
 net.core.rmem_max=134217728
 net.core.wmem_max=134217728
+net.core.rmem_default=26214400
+net.core.wmem_default=26214400
 net.ipv4.tcp_rmem=4096 87380 134217728
 net.ipv4.tcp_wmem=4096 65536 134217728
+# UDP buffers (game server traffic)
+net.ipv4.udp_rmem_min=8192
+net.ipv4.udp_wmem_min=8192
+# Connection queues
 net.core.netdev_max_backlog=250000
 net.ipv4.tcp_max_syn_backlog=8192
 net.core.somaxconn=65535
-net.ipv4.tcp_slow_start_after_idle=0
-net.ipv4.tcp_tw_reuse=1
-net.ipv4.tcp_fin_timeout=15
+# Keepalive
 net.ipv4.tcp_keepalive_time=300
 net.ipv4.tcp_keepalive_probes=5
 net.ipv4.tcp_keepalive_intvl=15
