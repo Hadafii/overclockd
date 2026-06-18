@@ -18,7 +18,7 @@
 ## ⚡ Quick Start
 
 ```bash
-curl -s https://raw.githubusercontent.com/raehost/overclockd/main/overclockd.sh | bash
+curl -s https://raw.githubusercontent.com/Hadafii/overclockd/main/overclockd.sh | bash
 ```
 
 > Harus dijalankan sebagai **root**. Script akan melakukan deteksi sistem terlebih dahulu sebelum apply tuning apapun.
@@ -132,7 +132,7 @@ Deteksi via: `systemd-detect-virt`, DMI table, `/proc/cpuinfo` hypervisor flag.
 Kalau false positive (bare metal tapi terdeteksi sebagai VM):
 
 ```bash
-curl -s https://raw.githubusercontent.com/raehost/overclockd/main/overclockd.sh | bash -s -- --force
+curl -s https://raw.githubusercontent.com/Hadafii/overclockd/main/overclockd.sh | bash -s -- --force
 ```
 
 ---
