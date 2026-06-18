@@ -61,33 +61,44 @@ print_logo() {
 # =============================================================================
 
 detect_vm_type() {
-    local RESULT="none"
+    # Check DMI product/vendor strings
+    local dmi_product="" dmi_vendor="" dmi_bios=""
+    dmi_product=$(cat /sys/class/dmi/id/product_name 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)
+    dmi_vendor=$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)
+    dmi_bios=$(cat /sys/class/dmi/id/bios_vendor 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)
 
-    # systemd-detect-virt: returns "none" string if bare metal
-    if command -v systemd-detect-virt &>/dev/null; then
-        local VIRT
-        VIRT=$(systemd-detect-virt 2>/dev/null) || true
-        if [[ -n "$VIRT" && "$VIRT" != "none" ]]; then
-            RESULT="$VIRT"
-        fi
+    # Known VM signatures in DMI
+    if   [[ "$dmi_product" == *"vmware"*     || "$dmi_vendor" == *"vmware"*     ]]; then printf "vmware";     return
+    elif [[ "$dmi_product" == *"virtualbox"* || "$dmi_vendor" == *"virtualbox"* ]]; then printf "virtualbox"; return
+    elif [[ "$dmi_product" == *"kvm"*        || "$dmi_vendor" == *"qemu"*       ]]; then printf "kvm";        return
+    elif [[ "$dmi_vendor"  == *"microsoft"*  || "$dmi_product" == *"virtual machine"* ]]; then printf "hyperv"; return
+    elif [[ "$dmi_vendor"  == *"xen"*        || "$dmi_product" == *"hvm domu"*  ]]; then printf "xen";        return
+    elif [[ "$dmi_bios"    == *"bochs"*      || "$dmi_bios" == *"seabios"*      ]]; then printf "kvm";        return
     fi
 
-    # DMI fallback
-    if [[ "$RESULT" == "none" ]]; then
-        if   grep -qi "vmware"     /sys/class/dmi/id/product_name 2>/dev/null; then RESULT="vmware"
-        elif grep -qi "virtualbox" /sys/class/dmi/id/product_name 2>/dev/null; then RESULT="virtualbox"
-        elif grep -qi "KVM"        /sys/class/dmi/id/product_name 2>/dev/null; then RESULT="kvm"
-        elif grep -qi "microsoft"  /sys/class/dmi/id/sys_vendor   2>/dev/null; then RESULT="hyperv"
-        elif [[ -f /proc/1/environ ]] && grep -qi "container=lxc" /proc/1/environ 2>/dev/null; then RESULT="lxc"
-        fi
+    # Check for LXC/container
+    if [[ -f /proc/1/environ ]]; then
+        if grep -qza "container=lxc" /proc/1/environ 2>/dev/null; then printf "lxc"; return; fi
+        if grep -qza "container=podman" /proc/1/environ 2>/dev/null; then printf "podman"; return; fi
+    fi
+    if [[ -f /.dockerenv ]]; then printf "docker"; return; fi
+
+    # Check cpuinfo hypervisor flag — bare metal CPUs NEVER have this flag
+    if grep -qP "^flags\s*:.*\bhypervisor\b" /proc/cpuinfo 2>/dev/null; then
+        # Extra verify: check if it's a known physical CPU running with virt extensions
+        # AMD-V (svm) and Intel VT-x (vmx) are legitimate on bare metal
+        # 'hypervisor' flag is ONLY set when running inside a VM
+        printf "unknown-vm"
+        return
     fi
 
-    # cpuinfo hypervisor flag
-    if [[ "$RESULT" == "none" ]]; then
-        grep -q "^flags.*hypervisor" /proc/cpuinfo 2>/dev/null && RESULT="unknown-vm" || true
+    # Check kernel modules that only exist in VMs
+    if lsmod 2>/dev/null | grep -qE "^(virtio_|xen_|vmw_|hv_)"; then
+        printf "unknown-vm"
+        return
     fi
 
-    printf '%s' "$RESULT"
+    printf "bare-metal"
 }
 
 # =============================================================================
@@ -152,7 +163,7 @@ detect_system() {
     UPTIME_STR="$((UPTIME_SEC/86400)) days, $(( (UPTIME_SEC%86400)/3600 )) hours, $(( (UPTIME_SEC%3600)/60 )) minutes"
 
     VM_TYPE=$(detect_vm_type)
-    VM_DISPLAY=$([[ "$VM_TYPE" == "none" ]] && echo "NONE (Bare Metal)" || echo "$VM_TYPE")
+    VM_DISPLAY=$([[ "$VM_TYPE" == "bare-metal" ]] && echo "✔ Bare Metal" || echo "⚠ $VM_TYPE")
     detect_cpu
 
     RAM_TOTAL_KB=$(awk '/MemTotal/{print $2}' /proc/meminfo)
@@ -253,7 +264,7 @@ detect_system() {
 
 check_baremetal() {
     VM_TYPE=$(detect_vm_type)
-    if [[ "$VM_TYPE" != "none" ]]; then
+    if [[ "$VM_TYPE" != "bare-metal" ]]; then
         echo ""
         error "VM environment terdeteksi: ${VM_TYPE}"
         error "Script ini hanya untuk bare metal node."
