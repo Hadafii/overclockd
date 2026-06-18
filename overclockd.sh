@@ -60,27 +60,33 @@ print_logo() {
 # =============================================================================
 
 detect_vm_type() {
-    VM_TYPE="NONE"
+    local RESULT="none"
 
+    # systemd-detect-virt: returns "none" string if bare metal
     if command -v systemd-detect-virt &>/dev/null; then
+        local VIRT
         VIRT=$(systemd-detect-virt 2>/dev/null || echo "none")
-        [[ "$VIRT" != "none" ]] && VM_TYPE="$VIRT"
-    fi
-
-    if [[ "$VM_TYPE" == "NONE" ]]; then
-        if grep -qi "vmware"     /sys/class/dmi/id/product_name 2>/dev/null; then VM_TYPE="vmware"
-        elif grep -qi "virtualbox" /sys/class/dmi/id/product_name 2>/dev/null; then VM_TYPE="virtualbox"
-        elif grep -qi "KVM"        /sys/class/dmi/id/product_name 2>/dev/null; then VM_TYPE="kvm"
-        elif grep -qi "microsoft"  /sys/class/dmi/id/sys_vendor   2>/dev/null; then VM_TYPE="hyperv"
-        elif [[ -f /proc/1/environ ]] && grep -qi "container=lxc" /proc/1/environ 2>/dev/null; then VM_TYPE="lxc"
+        if [[ "$VIRT" != "none" && -n "$VIRT" ]]; then
+            RESULT="$VIRT"
         fi
     fi
 
-    if [[ "$VM_TYPE" == "NONE" ]]; then
-        grep -q "hypervisor" /proc/cpuinfo && VM_TYPE="unknown-vm"
+    # DMI fallback
+    if [[ "$RESULT" == "none" ]]; then
+        if   grep -qi "vmware"     /sys/class/dmi/id/product_name 2>/dev/null; then RESULT="vmware"
+        elif grep -qi "virtualbox" /sys/class/dmi/id/product_name 2>/dev/null; then RESULT="virtualbox"
+        elif grep -qi "KVM"        /sys/class/dmi/id/product_name 2>/dev/null; then RESULT="kvm"
+        elif grep -qi "microsoft"  /sys/class/dmi/id/sys_vendor   2>/dev/null; then RESULT="hyperv"
+        elif [[ -f /proc/1/environ ]] && grep -qi "container=lxc" /proc/1/environ 2>/dev/null; then RESULT="lxc"
+        fi
     fi
 
-    echo "$VM_TYPE"
+    # cpuinfo hypervisor flag (only if all above passed)
+    if [[ "$RESULT" == "none" ]]; then
+        grep -q "^flags.*hypervisor" /proc/cpuinfo 2>/dev/null && RESULT="unknown-vm"
+    fi
+
+    echo "$RESULT"
 }
 
 # =============================================================================
@@ -145,6 +151,7 @@ detect_system() {
     UPTIME_STR="$((UPTIME_SEC/86400)) days, $(( (UPTIME_SEC%86400)/3600 )) hours, $(( (UPTIME_SEC%3600)/60 )) minutes"
 
     VM_TYPE=$(detect_vm_type)
+    VM_DISPLAY=$([[ "$VM_TYPE" == "none" ]] && echo "NONE (Bare Metal)" || echo "$VM_TYPE")
     detect_cpu
 
     RAM_TOTAL_KB=$(awk '/MemTotal/{print $2}' /proc/meminfo)
@@ -192,7 +199,7 @@ detect_system() {
     printf "  %-24s: %s\n" "Uptime"      "$UPTIME_STR"
     printf "  %-24s: %s\n" "Distro"      "$OS"
     printf "  %-24s: %s\n" "Kernel"      "$KERNEL ($ARCH)"
-    printf "  %-24s: %s\n" "VM Type"     "$VM_TYPE"
+    printf "  %-24s: %s\n" "VM Type"     "$VM_DISPLAY"
     echo ""
     echo -e "  ${BOLD}CPU${NC}"
     echo -e "  ─────────────────────────────────────────────────"
@@ -245,7 +252,7 @@ detect_system() {
 
 check_baremetal() {
     VM_TYPE=$(detect_vm_type)
-    if [[ "$VM_TYPE" != "NONE" ]]; then
+    if [[ "$VM_TYPE" != "none" ]]; then
         echo ""
         error "VM environment terdeteksi: ${VM_TYPE}"
         error "Script ini hanya untuk bare metal node."
@@ -256,11 +263,11 @@ check_baremetal() {
         warn "  - Banyak tuning sudah di-handle di level hypervisor"
         echo ""
         warn "Jika yakin ini bare metal (false positive), jalankan:"
-        warn "  bash node-setup.sh --force"
+        warn "  bash overclockd.sh --force"
         echo ""
         exit 1
     fi
-    log "Bare metal confirmed (VM Type: NONE)"
+    log "Bare metal confirmed ✔"
 }
 
 # =============================================================================
@@ -655,6 +662,110 @@ verify() {
 }
 
 # =============================================================================
+# INTERACTIVE MENU
+# =============================================================================
+
+print_menu() {
+    echo ""
+    echo -e "${BOLD}  Pilih tuning yang ingin dijalankan:${NC}"
+    echo -e "  ${DIM}(tekan Enter untuk toggle, A untuk semua, N untuk none, kemudian ketik 'run')${NC}"
+    echo ""
+    local i=1
+    for key in "${!MENU_ITEMS[@]}"; do
+        local label="${MENU_ITEMS[$key]}"
+        local state="${MENU_STATE[$key]}"
+        local indicator
+        [[ "$state" == "1" ]] && indicator="${GREEN}[✓]${NC}" || indicator="${RED}[ ]${NC}"
+        printf "  %s %s. %s\n" "$(echo -e $indicator)" "$i" "$label"
+        ((i++))
+    done
+    echo ""
+}
+
+interactive_menu() {
+    # Define menu items: key → label
+    declare -gA MENU_ITEMS=(
+        [cpu]="CPU Governor & C-state tuning"
+        [memory]="Memory tuning (THP, swappiness, dirty ratio)"
+        [swap]="Swap setup"
+        [network]="Network tuning (BBR, TCP buffers)"
+        [limits]="File descriptor limits (nofile → 65536)"
+        [docker]="Docker daemon tuning"
+        [irq]="IRQ balance"
+    )
+
+    # Default semua ON
+    declare -gA MENU_STATE=(
+        [cpu]="1"
+        [memory]="1"
+        [swap]="1"
+        [network]="1"
+        [limits]="1"
+        [docker]="1"
+        [irq]="1"
+    )
+
+    # Ordered keys for numbered menu
+    MENU_ORDER=(cpu memory swap network limits docker irq)
+
+    while true; do
+        print_menu
+
+        read -rp "$(echo -e "${YELLOW}[?]${NC} Nomor untuk toggle / A = semua ON / N = semua OFF / run = jalankan / q = batal: ")" INPUT
+        INPUT=$(echo "$INPUT" | tr '[:upper:]' '[:lower:]' | xargs)
+
+        case "$INPUT" in
+            run)
+                # Cek minimal satu dipilih
+                local any_selected=0
+                for key in "${MENU_ORDER[@]}"; do
+                    [[ "${MENU_STATE[$key]}" == "1" ]] && any_selected=1
+                done
+                if [[ $any_selected -eq 0 ]]; then
+                    warn "Tidak ada tuning yang dipilih."
+                else
+                    break
+                fi
+                ;;
+            a)
+                for key in "${MENU_ORDER[@]}"; do MENU_STATE[$key]="1"; done
+                ;;
+            n)
+                for key in "${MENU_ORDER[@]}"; do MENU_STATE[$key]="0"; done
+                ;;
+            q)
+                info "Dibatalkan."
+                exit 0
+                ;;
+            [1-9])
+                local idx=$((INPUT - 1))
+                if [[ $idx -ge 0 && $idx -lt ${#MENU_ORDER[@]} ]]; then
+                    local key="${MENU_ORDER[$idx]}"
+                    [[ "${MENU_STATE[$key]}" == "1" ]] && MENU_STATE[$key]="0" || MENU_STATE[$key]="1"
+                else
+                    warn "Nomor tidak valid."
+                fi
+                ;;
+            *)
+                warn "Input tidak dikenali. Ketik nomor, A, N, run, atau q."
+                ;;
+        esac
+    done
+
+    echo ""
+    echo -e "${BOLD}  Tuning yang akan dijalankan:${NC}"
+    for key in "${MENU_ORDER[@]}"; do
+        [[ "${MENU_STATE[$key]}" == "1" ]] && echo -e "  ${GREEN}[✓]${NC} ${MENU_ITEMS[$key]}"
+    done
+    echo ""
+
+    if ! confirm "Konfirmasi jalankan?"; then
+        info "Dibatalkan."
+        exit 0
+    fi
+}
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
@@ -673,19 +784,16 @@ main() {
         warn "--force flag: melewati VM check."
     fi
 
-    echo ""
-    if ! confirm "Apply semua performance tuning?"; then
-        info "Dibatalkan."
-        exit 0
-    fi
+    interactive_menu
 
-    tune_cpu
-    tune_memory
-    setup_swap
-    tune_network
-    tune_limits
-    tune_docker
-    tune_irq
+    [[ "${MENU_STATE[cpu]}"     == "1" ]] && tune_cpu
+    [[ "${MENU_STATE[memory]}"  == "1" ]] && tune_memory
+    [[ "${MENU_STATE[swap]}"    == "1" ]] && setup_swap
+    [[ "${MENU_STATE[network]}" == "1" ]] && tune_network
+    [[ "${MENU_STATE[limits]}"  == "1" ]] && tune_limits
+    [[ "${MENU_STATE[docker]}"  == "1" ]] && tune_docker
+    [[ "${MENU_STATE[irq]}"     == "1" ]] && tune_irq
+
     verify
 
     echo -e "\n${BOLD}${GREEN}  ✔ Tuning selesai! Reboot direkomendasikan.${NC}\n"
