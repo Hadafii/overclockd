@@ -33,7 +33,8 @@ require_root() {
 }
 
 confirm() {
-    read -rp "$(echo -e "${YELLOW}[?]${NC} $1 [y/N]: ")" resp
+    printf "${YELLOW}[?]${NC} $1 [y/N]: " >&2
+    read -r resp </dev/tty
     [[ "$resp" =~ ^[Yy]$ ]]
 }
 
@@ -65,8 +66,8 @@ detect_vm_type() {
     # systemd-detect-virt: returns "none" string if bare metal
     if command -v systemd-detect-virt &>/dev/null; then
         local VIRT
-        VIRT=$(systemd-detect-virt 2>/dev/null || echo "none")
-        if [[ "$VIRT" != "none" && -n "$VIRT" ]]; then
+        VIRT=$(systemd-detect-virt 2>/dev/null) || true
+        if [[ -n "$VIRT" && "$VIRT" != "none" ]]; then
             RESULT="$VIRT"
         fi
     fi
@@ -81,12 +82,12 @@ detect_vm_type() {
         fi
     fi
 
-    # cpuinfo hypervisor flag (only if all above passed)
+    # cpuinfo hypervisor flag
     if [[ "$RESULT" == "none" ]]; then
-        grep -q "^flags.*hypervisor" /proc/cpuinfo 2>/dev/null && RESULT="unknown-vm"
+        grep -q "^flags.*hypervisor" /proc/cpuinfo 2>/dev/null && RESULT="unknown-vm" || true
     fi
 
-    echo "$RESULT"
+    printf '%s' "$RESULT"
 }
 
 # =============================================================================
@@ -668,22 +669,21 @@ verify() {
 print_menu() {
     echo ""
     echo -e "${BOLD}  Pilih tuning yang ingin dijalankan:${NC}"
-    echo -e "  ${DIM}(tekan Enter untuk toggle, A untuk semua, N untuk none, kemudian ketik 'run')${NC}"
+    echo -e "  ${DIM}Ketik nomor untuk toggle on/off, A = semua ON, N = semua OFF, run = jalankan, q = batal${NC}"
     echo ""
     local i=1
-    for key in "${!MENU_ITEMS[@]}"; do
+    for key in "${MENU_ORDER[@]}"; do
         local label="${MENU_ITEMS[$key]}"
         local state="${MENU_STATE[$key]}"
         local indicator
         [[ "$state" == "1" ]] && indicator="${GREEN}[✓]${NC}" || indicator="${RED}[ ]${NC}"
-        printf "  %s %s. %s\n" "$(echo -e $indicator)" "$i" "$label"
+        printf "  $(echo -e $indicator) %s. %s\n" "$i" "$label"
         ((i++))
     done
     echo ""
 }
 
 interactive_menu() {
-    # Define menu items: key → label
     declare -gA MENU_ITEMS=(
         [cpu]="CPU Governor & C-state tuning"
         [memory]="Memory tuning (THP, swappiness, dirty ratio)"
@@ -694,7 +694,6 @@ interactive_menu() {
         [irq]="IRQ balance"
     )
 
-    # Default semua ON
     declare -gA MENU_STATE=(
         [cpu]="1"
         [memory]="1"
@@ -705,18 +704,19 @@ interactive_menu() {
         [irq]="1"
     )
 
-    # Ordered keys for numbered menu
+    # Urutan fixed, bukan dari hashmap
     MENU_ORDER=(cpu memory swap network limits docker irq)
 
     while true; do
         print_menu
 
-        read -rp "$(echo -e "${YELLOW}[?]${NC} Nomor untuk toggle / A = semua ON / N = semua OFF / run = jalankan / q = batal: ")" INPUT
+        # Baca dari /dev/tty supaya works waktu di-pipe dari curl
+        printf "${YELLOW}[?]${NC} Pilihan: " >&2
+        read -r INPUT </dev/tty
         INPUT=$(echo "$INPUT" | tr '[:upper:]' '[:lower:]' | xargs)
 
         case "$INPUT" in
             run)
-                # Cek minimal satu dipilih
                 local any_selected=0
                 for key in "${MENU_ORDER[@]}"; do
                     [[ "${MENU_STATE[$key]}" == "1" ]] && any_selected=1
@@ -747,7 +747,7 @@ interactive_menu() {
                 fi
                 ;;
             *)
-                warn "Input tidak dikenali. Ketik nomor, A, N, run, atau q."
+                warn "Input tidak dikenali. Ketik nomor (1-7), A, N, run, atau q."
                 ;;
         esac
     done
@@ -759,7 +759,9 @@ interactive_menu() {
     done
     echo ""
 
-    if ! confirm "Konfirmasi jalankan?"; then
+    printf "${YELLOW}[?]${NC} Konfirmasi jalankan? [y/N]: " >&2
+    read -r CONFIRM </dev/tty
+    if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
         info "Dibatalkan."
         exit 0
     fi
