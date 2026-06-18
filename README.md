@@ -18,10 +18,19 @@
 ## ⚡ Quick Start
 
 ```bash
-curl -s https://raw.githubusercontent.com/Hadafii/overclockd/main/overclockd.sh | bash
+bash <(curl -s https://raw.githubusercontent.com/Hadafii/overclockd/main/overclockd.sh)
 ```
 
 > Harus dijalankan sebagai **root**. Script akan melakukan deteksi sistem terlebih dahulu sebelum apply tuning apapun.
+
+> **Kenapa `bash <(curl ...)` bukan `curl | bash`?**
+> `curl | bash` membuat stdin ter-pipe sehingga interactive menu tidak bisa menerima input. `bash <(...)` menggunakan process substitution — stdin tetap terhubung ke terminal.
+
+Jika terdeteksi sebagai VM padahal bare metal (false positive):
+
+```bash
+bash <(curl -s https://raw.githubusercontent.com/Hadafii/overclockd/main/overclockd.sh) --force
+```
 
 ---
 
@@ -132,7 +141,7 @@ Deteksi via: `systemd-detect-virt`, DMI table, `/proc/cpuinfo` hypervisor flag.
 Kalau false positive (bare metal tapi terdeteksi sebagai VM):
 
 ```bash
-curl -s https://raw.githubusercontent.com/Hadafii/overclockd/main/overclockd.sh | bash -s -- --force
+bash <(curl -s https://raw.githubusercontent.com/Hadafii/overclockd/main/overclockd.sh) --force
 ```
 
 ---
